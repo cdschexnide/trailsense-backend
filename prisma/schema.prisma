@@ -1,0 +1,82 @@
+// TrailSense Backend Database Schema
+// Supports both SQLite (development) and PostgreSQL (production)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ESP32 Devices
+model Device {
+  id               String    @id
+  name             String
+  online           Boolean   @default(false)
+  batteryPercent   Int?
+  signalStrength   String?
+  detectionCount   Int       @default(0)
+  latitude         Float?
+  longitude        Float?
+  lastSeen         DateTime?
+  firmwareVersion  String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  alerts           Alert[]
+
+  @@index([lastSeen])
+}
+
+// Detection Alerts
+model Alert {
+  id                String    @id @default(uuid())
+  deviceId          String
+  timestamp         DateTime
+  threatLevel       String
+  detectionType     String
+  rssi              Int
+  macAddress        String?
+  cellularStrength  Int?
+  isReviewed        Boolean   @default(false)
+  isFalsePositive   Boolean   @default(false)
+  latitude          Float?
+  longitude         Float?
+  metadata          Json?     // JSON type for PostgreSQL
+  createdAt         DateTime  @default(now())
+
+  device            Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([timestamp(sort: Desc)])
+  @@index([threatLevel])
+  @@index([isReviewed])
+}
+
+// Mobile App Users
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String
+  name          String?
+  fcmTokens     String[]  @default([])  // Array of FCM tokens
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([email])
+}
+
+// Known Safe Devices (Whitelist)
+model Whitelist {
+  id          String    @id @default(uuid())
+  macAddress  String    @unique
+  deviceName  String?
+  category    String?
+  notes       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([macAddress])
+}
