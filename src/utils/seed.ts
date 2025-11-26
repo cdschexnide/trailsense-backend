@@ -144,7 +144,7 @@ async function seedUsers() {
         email: userData.email,
         passwordHash,
         name: userData.name,
-        fcmTokens: '',
+        fcmTokens: [],
       },
     });
 
@@ -310,7 +310,7 @@ async function seedAlerts() {
         isFalsePositive: randomInt(1, 100) <= 5, // 5% false positives
         latitude: device.latitude,
         longitude: device.longitude,
-        metadata: JSON.stringify(metadata),
+        metadata,
       },
     });
 

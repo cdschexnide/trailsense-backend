@@ -67,14 +67,14 @@ async function handleDetection(payload: GoliothWebhookPayload) {
   const macAddress = padMacAddress(det.mac);
 
   // Build metadata object (flexible for different detection types)
-  const metadata = JSON.stringify({
+  const metadata = {
     zone: det.zone,
     distance: det.dist,
     ...(det.ch && { channel: det.ch }), // WiFi only
     ...(det.name && { deviceName: det.name }), // BLE only
     ...(det.avg && { cellularAvg: det.avg }), // Cellular only
     ...(det.delta && { cellularDelta: det.delta }), // Cellular only
-  });
+  };
 
   // Create alert in database
   const alert = await prisma.alert.create({
