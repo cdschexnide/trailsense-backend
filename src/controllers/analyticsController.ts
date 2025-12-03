@@ -91,7 +91,7 @@ export const getAnalytics = async (req: Request, res: Response) => {
       SELECT
         DATE(timestamp) as date,
         COUNT(*) as count
-      FROM Alert
+      FROM "Alert"
       WHERE timestamp >= ${start} AND timestamp <= ${end}
       GROUP BY DATE(timestamp)
       ORDER BY date ASC
