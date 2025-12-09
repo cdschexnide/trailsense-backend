@@ -7,12 +7,35 @@
 
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { GoliothWebhookPayload } from '../types';
+import { GoliothWebhookPayload, GoliothPayloadData } from '../types';
 import { calculateThreatLevel, mapDetectionType, padMacAddress } from '../services/threatClassifier';
 import { broadcastAlert, broadcastDeviceStatus } from '../services/websocketService';
 import { config } from '../config/env';
 
 const prisma = new PrismaClient();
+
+/**
+ * Extract data from payload (handles both 'data' and 'value' fields)
+ * Golioth webhooks may use either field depending on configuration
+ */
+function extractPayloadData(payload: GoliothWebhookPayload): GoliothPayloadData | null {
+  const data = payload.data ?? payload.value;
+  if (!data) {
+    console.error('[Golioth] No data/value field in payload:', JSON.stringify(payload));
+    return null;
+  }
+  return data;
+}
+
+/**
+ * Normalize path from Golioth webhook
+ * Handles variations like "/detections", "detections", "/.s/detections"
+ */
+function normalizePath(path: string | undefined): string {
+  if (!path) return '';
+  // Strip leading slashes and get the last segment
+  return path.replace(/^\/+/, '').split('/').pop() || '';
+}
 
 /**
  * Main webhook handler
@@ -31,13 +54,19 @@ export const handleGoliothWebhook = async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Route based on path
-    if (payload.path === 'detections') {
+    // Normalize path (handles "/detections", "detections", "/.s/detections", etc.)
+    const rawPath = payload.path || '';
+    const normalizedPath = normalizePath(rawPath);
+
+    console.log(`[Golioth] Path: "${rawPath}" → normalized: "${normalizedPath}"`);
+
+    // Route based on normalized path
+    if (normalizedPath === 'detections') {
       await handleDetection(payload);
-    } else if (payload.path === 'heartbeat') {
+    } else if (normalizedPath === 'heartbeat') {
       await handleHeartbeat(payload);
     } else {
-      console.warn(`[Golioth] Unknown path: ${payload.path}`);
+      console.warn(`[Golioth] Unknown path: ${rawPath} (normalized: ${normalizedPath})`);
     }
 
     // Return 200 OK quickly (important - Golioth will retry if slow)
@@ -52,7 +81,10 @@ export const handleGoliothWebhook = async (req: Request, res: Response) => {
  * Handle detection event (WiFi, BLE, or Cellular)
  */
 async function handleDetection(payload: GoliothWebhookPayload) {
-  const { data } = payload;
+  // Extract data from payload (handles both 'data' and 'value' fields)
+  const data = extractPayloadData(payload);
+  if (!data) return;
+
   const { det } = data;
 
   if (!det) {
@@ -63,29 +95,55 @@ async function handleDetection(payload: GoliothWebhookPayload) {
   const deviceId = data.did;
   const detectionType = mapDetectionType(det.t);
   const timestamp = new Date(data.ts * 1000); // Convert Unix seconds to JS Date
-  const threatLevel = calculateThreatLevel(det.r, det.zone, det.t);
+
+  // Determine signal strength based on detection type
+  // Cellular uses 'peak', WiFi/BLE use 'r'
+  const signalStrength = det.t === 'c'
+    ? (det.peak ?? det.avg ?? -100)
+    : (det.r ?? -100);
+
+  const threatLevel = calculateThreatLevel(signalStrength, det.zone, det.t);
   const macAddress = padMacAddress(det.mac);
 
   // Build metadata object (flexible for different detection types)
   const metadata = {
     zone: det.zone,
     distance: det.dist,
-    ...(det.ch && { channel: det.ch }), // WiFi only
+    ...(det.ch !== undefined && { channel: det.ch }), // WiFi only
     ...(det.name && { deviceName: det.name }), // BLE only
-    ...(det.avg && { cellularAvg: det.avg }), // Cellular only
-    ...(det.delta && { cellularDelta: det.delta }), // Cellular only
+    ...(det.avg !== undefined && { cellularAvg: det.avg }), // Cellular only
+    ...(det.delta !== undefined && { cellularDelta: det.delta }), // Cellular only
+    ...(det.peak !== undefined && { cellularPeak: det.peak }), // Cellular only
   };
 
-  // Create alert in database
+  // STEP 1: Ensure device exists (upsert)
+  // This creates a minimal device record if first contact is a detection
+  await prisma.device.upsert({
+    where: { id: deviceId },
+    update: {
+      lastSeen: timestamp,
+      online: true,
+      detectionCount: { increment: 1 },
+    },
+    create: {
+      id: deviceId,
+      name: deviceId, // Default name, user can change later
+      online: true,
+      lastSeen: timestamp,
+      detectionCount: 1,
+    },
+  });
+
+  // STEP 2: Create alert (device now guaranteed to exist)
   const alert = await prisma.alert.create({
     data: {
       deviceId,
       timestamp,
       threatLevel,
       detectionType,
-      rssi: det.r,
+      rssi: signalStrength, // Now always has a value
       macAddress,
-      cellularStrength: det.peak,
+      cellularStrength: det.peak, // Keep for cellular-specific queries
       isReviewed: false,
       isFalsePositive: false,
       metadata,
@@ -96,26 +154,16 @@ async function handleDetection(payload: GoliothWebhookPayload) {
 
   // Broadcast to WebSocket clients
   broadcastAlert(alert);
-
-  // Update device detection count and last seen
-  await prisma.device.update({
-    where: { id: deviceId },
-    data: {
-      detectionCount: { increment: 1 },
-      lastSeen: timestamp,
-      online: true,
-    },
-  }).catch(() => {
-    // Device doesn't exist yet - will be created on heartbeat
-    console.log(`[Golioth] Device ${deviceId} not found (will be created on heartbeat)`);
-  });
 }
 
 /**
  * Handle heartbeat/health event
  */
 async function handleHeartbeat(payload: GoliothWebhookPayload) {
-  const { data } = payload;
+  // Extract data from payload (handles both 'data' and 'value' fields)
+  const data = extractPayloadData(payload);
+  if (!data) return;
+
   const { health } = data;
 
   if (!health) {

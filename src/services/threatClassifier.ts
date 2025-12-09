@@ -22,12 +22,23 @@
 
 import { ThreatLevel } from '../types';
 
+/**
+ * Calculates threat level based on signal strength, zone, and detection type
+ *
+ * @param rssi Signal strength in dBm (use 'peak' for cellular)
+ * @param zone Detection zone (0=immediate, 1=near, 2=far, 3=extreme)
+ * @param detectionType 'w'=wifi, 'b'=bluetooth, 'c'=cellular
+ */
 export function calculateThreatLevel(
-  rssi: number,
-  zone: number,
+  rssi: number | undefined | null,
+  zone: number | undefined,
   detectionType: 'w' | 'b' | 'c'
 ): ThreatLevel {
   let score = 0;
+
+  // Sanitize inputs - handle undefined/null/NaN gracefully
+  const safeRssi = typeof rssi === 'number' && !isNaN(rssi) ? rssi : -100;
+  const safeZone = typeof zone === 'number' && !isNaN(zone) ? zone : 3;
 
   // Factor 1: Detection Type
   // Cellular-only detections are suspicious (device may have disabled WiFi/BT)
@@ -35,21 +46,23 @@ export function calculateThreatLevel(
     score += 40;
   }
 
-  // Factor 2: RSSI (proximity)
+  // Factor 2: Signal Strength (proximity indicator)
   // Higher RSSI (less negative) means device is closer
-  if (rssi > -50) {
+  // Note: For cellular, this should be 'peak' power, not 'r'
+  if (safeRssi > -50) {
     score += 30; // Very close (< 5 meters)
-  } else if (rssi > -70) {
+  } else if (safeRssi > -70) {
     score += 15; // Moderately close (5-20 meters)
   }
 
   // Factor 3: Zone
   // Zone 0: IMMEDIATE (0-3m)
   // Zone 1: NEAR (3-15m)
-  // Zone 2: FAR (15m+)
-  if (zone === 0) {
+  // Zone 2: FAR (15-50m)
+  // Zone 3: EXTREME (50m+)
+  if (safeZone === 0) {
     score += 20; // Immediate proximity
-  } else if (zone === 1) {
+  } else if (safeZone === 1) {
     score += 10; // Near proximity
   }
 
