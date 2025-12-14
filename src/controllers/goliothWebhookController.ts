@@ -28,6 +28,19 @@ function extractPayloadData(payload: GoliothWebhookPayload): GoliothPayloadData 
 }
 
 /**
+ * Determine the path/type from payload content
+ * Since inject-metadata doesn't include path, we infer it from the data content
+ */
+function inferPathFromData(data: GoliothPayloadData | null): string {
+  if (!data) return '';
+  if (data.det) return 'detections';
+  if (data.health) return 'heartbeat';
+  // Check for test payload
+  if ('test' in (data as any)) return 'test';
+  return '';
+}
+
+/**
  * Normalize path from Golioth webhook
  * Handles variations like "/detections", "detections", "/.s/detections"
  */
@@ -39,7 +52,7 @@ function normalizePath(path: string | undefined): string {
 
 /**
  * Main webhook handler
- * Routes to either detection or heartbeat handler based on path
+ * Routes to either detection or heartbeat handler based on path or data content
  */
 export const handleGoliothWebhook = async (req: Request, res: Response) => {
   try {
@@ -54,19 +67,32 @@ export const handleGoliothWebhook = async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Normalize path (handles "/detections", "detections", "/.s/detections", etc.)
+    // Extract the data payload first
+    const data = extractPayloadData(payload);
+
+    // Determine path: try explicit path first, then infer from data content
+    // inject-metadata transformer doesn't include path, so we infer it
     const rawPath = payload.path || '';
-    const normalizedPath = normalizePath(rawPath);
+    let normalizedPath = normalizePath(rawPath);
 
-    console.log(`[Golioth] Path: "${rawPath}" → normalized: "${normalizedPath}"`);
+    // If no path in payload, infer from data content (det = detections, health = heartbeat)
+    if (!normalizedPath && data) {
+      normalizedPath = inferPathFromData(data);
+      console.log(`[Golioth] Path inferred from data content: "${normalizedPath}"`);
+    } else {
+      console.log(`[Golioth] Path: "${rawPath}" → normalized: "${normalizedPath}"`);
+    }
 
-    // Route based on normalized path
+    // Route based on path
     if (normalizedPath === 'detections') {
       await handleDetection(payload);
     } else if (normalizedPath === 'heartbeat') {
       await handleHeartbeat(payload);
+    } else if (normalizedPath === 'test') {
+      console.log('[Golioth] Test payload received - connectivity confirmed');
     } else {
       console.warn(`[Golioth] Unknown path: ${rawPath} (normalized: ${normalizedPath})`);
+      console.warn('[Golioth] Payload data keys:', data ? Object.keys(data) : 'no data');
     }
 
     // Return 200 OK quickly (important - Golioth will retry if slow)

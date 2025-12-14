@@ -32,14 +32,27 @@ export interface GoliothPayloadData {
   health?: GoliothHealthData;
 }
 
-// Golioth Webhook Payload (received from Golioth when ESP32 sends data)
-// Supports both 'data' and 'value' fields (Golioth may use either)
+// Golioth timestamp format from inject-metadata transformer
+export interface GoliothTimestamp {
+  nanos: number;
+  seconds: number;
+}
+
+// Golioth Webhook Payload (received from Golioth with inject-metadata transformer)
+// inject-metadata produces snake_case fields and timestamp as object
 export interface GoliothWebhookPayload {
-  deviceId: string; // "trailsense-device-01@trailsense.golioth.io"
-  timestamp: number; // Unix timestamp in milliseconds
-  path: string; // "detections" or "heartbeat" (may have leading slash)
-  data?: GoliothPayloadData; // Standard field name
-  value?: GoliothPayloadData; // Alternative field name (some Golioth configs)
+  // Fields from inject-metadata transformer (snake_case)
+  device_id?: string; // Device ID from Golioth
+  project_id?: string; // Project ID from Golioth
+  timestamp?: GoliothTimestamp | number; // Can be object {nanos, seconds} or number
+
+  // The ESP32 payload is nested under 'data' by inject-metadata
+  data?: GoliothPayloadData;
+
+  // Legacy support for other Golioth configurations
+  deviceId?: string; // camelCase variant
+  path?: string; // Stream path (may not be present with inject-metadata)
+  value?: GoliothPayloadData; // Alternative field name
 }
 
 // Alert Filters (for querying alerts from mobile app)
